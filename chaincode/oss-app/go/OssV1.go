@@ -25,13 +25,11 @@ type Doc struct {
 
 func checkIfError(err error) error {
 	if err != nil {
-		return fmt.Errorf("Failed to read the data from world state: %v", err)
+		return fmt.Errorf("failed to read the data from world state: %v", err)
 	}
 	return nil
 }
 
-// sepertinya harus ada nested, dari user ID dulu terus Doc ID
-// need to be discussed
 // CreateDoc creates a new document in the world state
 func (nibsc *NIBIssuanceSmartContract) CreateDoc(ctx contractapi.TransactionContextInterface, userID string, docID string, docName string, docType string, timestamp time.Time, ipfsHash string) error {
 	docJSON, err := ctx.GetStub().GetState(userID) //read prop from world state using id userID //checks if the property already exists
@@ -40,7 +38,7 @@ func (nibsc *NIBIssuanceSmartContract) CreateDoc(ctx contractapi.TransactionCont
 	}
 
 	if docJSON != nil {
-		return fmt.Errorf("The document with userID %s already exists", userID)
+		return fmt.Errorf("the document with userID %s already exists", userID)
 	}
 
 	doc := Doc{
@@ -61,30 +59,41 @@ func (nibsc *NIBIssuanceSmartContract) CreateDoc(ctx contractapi.TransactionCont
 	return ctx.GetStub().PutState(userID, docBytes)
 }
 
-// Query by ID [kalau UserID berarti semua dokumen punya user? terus kalo mau spesifik ke ID nya gimana?]
-// Ini sama aja kayak query all?
-// Ini harusnya query all docs, terus diubah jadi docbyId
-// QueryDocByUserId queries a document by userID
-func (nibsc *NIBIssuanceSmartContract) QueryDocByUserId(ctx contractapi.TransactionContextInterface, userID string) (*Doc, error) {
-	docJSON, err := ctx.GetStub().GetState(userID) //read prop from world state using id //checks if the property already exists
+// helper function to reduce redundancy
+func (nibsc *NIBIssuanceSmartContract) queryDoc(ctx contractapi.TransactionContextInterface, key string) (*Doc, error) {
+	docJSON, err := ctx.GetStub().GetState(key) // read prop from world state using the key //checks if the property already exists
 	if err := checkIfError(err); err != nil {
 		return nil, err
 	}
 
 	if docJSON == nil {
-		return nil, fmt.Errorf("The document with userID %s does not exist", userID)
+		return nil, fmt.Errorf("the document with key %s does not exist", key)
 	}
 
 	var doc Doc
 	err = json.Unmarshal(docJSON, &doc)
-
 	if err != nil {
 		return nil, err
 	}
 	return &doc, nil
 }
 
-// QueryAllDocs queries all documents
+// QueryDocByUserId queries a document by userID
+func (nibsc *NIBIssuanceSmartContract) QueryDocByUserId(ctx contractapi.TransactionContextInterface, userID string) (*Doc, error) {
+	return nibsc.queryDoc(ctx, userID)
+}
+
+// QueryDocByDocId queries a document by docID
+func (nibsc *NIBIssuanceSmartContract) QueryDocByDocId(ctx contractapi.TransactionContextInterface, docID string) (*Doc, error) {
+	return nibsc.queryDoc(ctx, docID)
+}
+
+// QueryDocByName queries a document by docName
+func (nibsc *NIBIssuanceSmartContract) QueryDocByName(ctx contractapi.TransactionContextInterface, docName string) (*Doc, error) {
+	return nibsc.queryDoc(ctx, docName)
+}
+
+// QueryAllDocs queries all documents [not specified by user id]
 func (nibsc *NIBIssuanceSmartContract) QueryAllDocs(ctx contractapi.TransactionContextInterface) ([]*Doc, error) {
 	docIterator, err := ctx.GetStub().GetStateByRange("", "") //getting all the values stored in the world state
 	// cari getstate yang bisa get range by user id
