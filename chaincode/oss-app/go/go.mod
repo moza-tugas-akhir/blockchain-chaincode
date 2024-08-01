@@ -1,4 +1,4 @@
-module example.com/OssV1
+module mozasajidah/OssV1
 
 go 1.22.4
 

@@ -30,15 +30,22 @@ func checkIfError(err error) error {
 	return nil
 }
 
-// CreateDoc creates a new document in the world state
+// CreateDoc function to store documents with composite keys and secondary indexes
 func (nibsc *NIBIssuanceSmartContract) CreateDoc(ctx contractapi.TransactionContextInterface, userID string, docID string, docName string, docType string, timestamp time.Time, ipfsHash string) error {
-	docJSON, err := ctx.GetStub().GetState(userID) //read prop from world state using id userID //checks if the property already exists
+	// Create a composite key for the document using userID and docID
+	docKey, err := ctx.GetStub().CreateCompositeKey("Doc", []string{userID, docID})
+	if err != nil {
+		return fmt.Errorf("failed to create composite key: %v", err)
+	}
+
+	// Checking if the document already exists
+	docJSON, err := ctx.GetStub().GetState(docKey)
 	if err := checkIfError(err); err != nil {
 		return err
 	}
 
 	if docJSON != nil {
-		return fmt.Errorf("the document with userID %s already exists", userID)
+		return fmt.Errorf("the document with userID %s and docID %s already exists", userID, docID)
 	}
 
 	doc := Doc{
@@ -56,18 +63,69 @@ func (nibsc *NIBIssuanceSmartContract) CreateDoc(ctx contractapi.TransactionCont
 		return err
 	}
 
-	return ctx.GetStub().PutState(userID, docBytes)
+	// Putting the document state to the ledger using the composite key
+	err = ctx.GetStub().PutState(docKey, docBytes)
+	if err != nil {
+		return err
+	}
+
+	// Creating a secondary index for searching by document name
+	docNameKey, err := ctx.GetStub().CreateCompositeKey("DocName", []string{docName, userID, docID})
+	if err != nil {
+		return fmt.Errorf("failed to create composite key for doc name: %v", err)
+	}
+
+	// Storing the document key in the secondary index
+	return ctx.GetStub().PutState(docNameKey, []byte(docKey))
 }
 
-// helper function to reduce redundancy
-func (nibsc *NIBIssuanceSmartContract) queryDoc(ctx contractapi.TransactionContextInterface, key string) (*Doc, error) {
-	docJSON, err := ctx.GetStub().GetState(key) // read prop from world state using the key //checks if the property already exists
+// QueryDocByDocId queries a document by docID
+func (nibsc *NIBIssuanceSmartContract) QueryDocByUserId(ctx contractapi.TransactionContextInterface, userID string) ([]*Doc, error) {
+	iterator, err := ctx.GetStub().GetStateByPartialCompositeKey("Doc", []string{userID})
+	if err != nil {
+		return nil, err
+	}
+	defer iterator.Close()
+
+	var docs []*Doc
+	for iterator.HasNext() {
+		queryResponse, err := iterator.Next()
+		if err != nil {
+			return nil, err
+		}
+
+		var doc Doc
+		err = json.Unmarshal(queryResponse.Value, &doc)
+		if err != nil {
+			return nil, err
+		}
+
+		docs = append(docs, &doc)
+	}
+
+	if len(docs) == 0 {
+		return nil, fmt.Errorf("no documents found for user ID %s", userID)
+	}
+
+	return docs, nil
+}
+
+// QueryDocByDocId function to retrieve a document by docID
+func (nibsc *NIBIssuanceSmartContract) QueryDocByDocId(ctx contractapi.TransactionContextInterface, userID string, docID string) (*Doc, error) {
+	// Create the composite key
+	docKey, err := ctx.GetStub().CreateCompositeKey("Doc", []string{userID, docID})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create composite key: %v", err)
+	}
+
+	// Retrieve the document
+	docJSON, err := ctx.GetStub().GetState(docKey)
 	if err := checkIfError(err); err != nil {
 		return nil, err
 	}
 
 	if docJSON == nil {
-		return nil, fmt.Errorf("the document with key %s does not exist", key)
+		return nil, fmt.Errorf("the document with userID %s and docID %s does not exist", userID, docID)
 	}
 
 	var doc Doc
@@ -78,49 +136,100 @@ func (nibsc *NIBIssuanceSmartContract) queryDoc(ctx contractapi.TransactionConte
 	return &doc, nil
 }
 
-// QueryDocByUserId queries a document by userID
-func (nibsc *NIBIssuanceSmartContract) QueryDocByUserId(ctx contractapi.TransactionContextInterface, userID string) (*Doc, error) {
-	return nibsc.queryDoc(ctx, userID)
-}
-
-// QueryDocByDocId queries a document by docID
-func (nibsc *NIBIssuanceSmartContract) QueryDocByDocId(ctx contractapi.TransactionContextInterface, docID string) (*Doc, error) {
-	return nibsc.queryDoc(ctx, docID)
-}
-
-// QueryDocByName queries a document by docName
-func (nibsc *NIBIssuanceSmartContract) QueryDocByName(ctx contractapi.TransactionContextInterface, docName string) (*Doc, error) {
-	return nibsc.queryDoc(ctx, docName)
-}
-
-// QueryAllDocs queries all documents [not specified by user id]
-func (nibsc *NIBIssuanceSmartContract) QueryAllDocs(ctx contractapi.TransactionContextInterface) ([]*Doc, error) {
-	docIterator, err := ctx.GetStub().GetStateByRange("", "") //getting all the values stored in the world state
-	// cari getstate yang bisa get range by user id
-	if err := checkIfError(err); err != nil {
+func (nibsc *NIBIssuanceSmartContract) QueryDocByName(ctx contractapi.TransactionContextInterface, docName string) ([]*Doc, error) {
+	iterator, err := ctx.GetStub().GetStateByPartialCompositeKey("DocName", []string{docName})
+	if err != nil {
 		return nil, err
 	}
-	defer docIterator.Close()
+	defer iterator.Close()
 
 	var docs []*Doc
+	for iterator.HasNext() {
+		queryResponse, err := iterator.Next()
+		if err != nil {
+			return nil, err
+		}
 
-	//for each loop
-	for docIterator.HasNext() {
-		response, err := docIterator.Next()
+		// Get the actual document key from the secondary index
+		docKey := queryResponse.Value
+
+		// Retrieve the document using the document key
+		docJSON, err := ctx.GetStub().GetState(string(docKey))
 		if err != nil {
 			return nil, err
 		}
 
 		var doc Doc
-		err = json.Unmarshal(response.Value, &doc)
+		err = json.Unmarshal(docJSON, &doc)
 		if err != nil {
 			return nil, err
 		}
+
 		docs = append(docs, &doc)
+	}
+
+	if len(docs) == 0 {
+		return nil, fmt.Errorf("no documents found with document name %s", docName)
 	}
 
 	return docs, nil
 }
+
+// QueryAllDocs queries all documents [not specified by user id]
+// func (nibsc *NIBIssuanceSmartContract) QueryAllDocs(ctx contractapi.TransactionContextInterface) ([]*Doc, error) {
+// 	// Getting all the values stored in the world state
+// 	docIterator, err := ctx.GetStub().GetStateByRange("", "")
+// 	if err != nil {
+// 		return nil, err
+// 	}
+// 	defer docIterator.Close()
+
+// 	var docs []*Doc
+
+// 	// For each loop
+// 	for docIterator.HasNext() {
+// 		response, err := docIterator.Next()
+// 		if err != nil {
+// 			return nil, err
+// 		}
+
+// 		var doc Doc
+// 		err = json.Unmarshal(response.Value, &doc)
+// 		if err != nil {
+// 			return nil, err
+// 		}
+// 		docs = append(docs, &doc)
+// 	}
+
+// 	if len(docs) == 0 {
+// 		fmt.Println("No documents found")
+// 	} else {
+// 		fmt.Printf("Found %d documents\n", len(docs))
+// 	}
+
+// 	return docs, nil
+// }
+
+// QueryAllDocsJSON returns a readable results of the QueryAllDocs function
+// func (nibsc *NIBIssuanceSmartContract) QueryAllDocsJSON(ctx contractapi.TransactionContextInterface) (string, error) {
+// 	docs, err := nibsc.QueryAllDocs(ctx)
+// 	if err != nil {
+// 		return "", err
+// 	}
+
+// 	if docs == nil {
+// 		fmt.Println("QueryAllDocs returned nil")
+// 		return "[]", nil
+// 	}
+
+// 	docsJSON, err := json.Marshal(docs)
+// 	if err != nil {
+// 		return "", err
+// 	}
+
+// 	fmt.Printf("Returning JSON: %s\n", string(docsJSON))
+// 	return string(docsJSON), nil
+// }
 
 func main() {
 	fmt.Println("Starting NIB Issuance Smart Contract")
