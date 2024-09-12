@@ -2,6 +2,12 @@
 export PATH=${PWD}/../bin:${PWD}:$PATH
 export FABRIC_CFG_PATH=$PWD/../config/
 
+# Verify if peer binary exists in the path
+if ! command -v peer &> /dev/null; then
+  echo "peer binary could not be found. Please ensure it is installed and available in your PATH."
+  # exit 1
+fi
+
 #Setting up one of the Orgs Peer Env Variables
 # Environment variables for Org1
  
